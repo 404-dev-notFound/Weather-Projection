@@ -1,0 +1,6 @@
+/.cdsapirc
+/.venv
+/dims_output.txt
+/MIROC6_UAE_Spatial_Input_1950_2014.csv
+/project_specification.md
+/test_dims.py
