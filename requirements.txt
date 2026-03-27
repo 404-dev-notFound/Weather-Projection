@@ -1,0 +1,18 @@
+# Core Data Engineering & Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Deep Learning Engine
+torch>=2.0.0
+
+# Fuzzy Logic UHI Engine
+scikit-fuzzy>=0.4.2
+
+# Statistical Analysis (MK & SQ-MK Tests)
+pymannkendall>=1.4.3
+matplotlib>=3.7.0
+
+# ERA5 / Copernicus Data Fetching
+cdsapi>=0.6.1
+xarray>=2023.0.0
+netCDF4>=1.6.0  # Required by xarray to open ERA5 .nc files
