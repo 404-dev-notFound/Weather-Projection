@@ -44,7 +44,10 @@ df_daily.columns = ['Date', 'Lat', 'Lon', 'T_avg', 'T_min', 'T_max', 'PCP', 'RH'
 # CRITICAL FIX: Handle missing data safely
 # Group by pixel first so we interpolate purely through time, not across the physical map
 print("Interpolating missing values safely across time...")
-df_daily = df_daily.groupby(['Lat', 'Lon'], group_keys=False).apply(
+metric_cols = ['T_avg', 'T_min', 'T_max', 'PCP', 'RH', 'AP', 'WS']
+
+# We use .transform() instead of .apply() to explicitly protect Lat and Lon
+df_daily[metric_cols] = df_daily.groupby(['Lat', 'Lon'])[metric_cols].transform(
     lambda x: x.interpolate(method='linear', limit_direction='both')
 )
 
@@ -53,6 +56,6 @@ print(df_daily.head(10))
 
 # 5. Save to CSV
 # I updated the filename to end in 2014 to match the timeframe of the logs you just shared
-output_filename = "UAE_ERA5_Spatial_Baseline_1977_2014.csv"
+output_filename = "UAE_ERA5_Spatial_Baseline_1950_2014.csv"
 df_daily.to_csv(output_filename, index=False)
 print(f"\nSaved Gridded Ground Truth data to {output_filename}")

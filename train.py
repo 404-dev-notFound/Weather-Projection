@@ -5,7 +5,7 @@ from models import CNNLSTM_Downscaler
 from data_loader import get_dataloaders
 import os
 
-def train_model(miroc6_path, era5_path, epochs=10, batch_size=4, lr=1e-3, seq_length=14):
+def train_model(miroc6_path, era5_path, epochs=50, batch_size=8, lr=1e-3, seq_length=14, patience=7):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using compute device: {device}")
     
@@ -20,7 +20,9 @@ def train_model(miroc6_path, era5_path, epochs=10, batch_size=4, lr=1e-3, seq_le
     
     # 2. Instantiate Model
     print("Instantiating CNN-LSTM Model...")
-    model = CNNLSTM_Downscaler(in_channels=5, hidden_channels=32, out_channels=5).to(device)
+    model = CNNLSTM_Downscaler(in_channels=5, hidden_channels=64, out_channels=5).to(device)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  Model parameters: {total_params:,}")
     
     # 3. Loss & Optimizer
     # HuberLoss is ideal for climate arrays as it penalizes extreme outliers less aggressively than MSE, 
@@ -28,8 +30,12 @@ def train_model(miroc6_path, era5_path, epochs=10, batch_size=4, lr=1e-3, seq_le
     criterion = nn.HuberLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
+    # Learning Rate Scheduler: halves LR when val loss plateaus for 3 epochs
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+    
     # 4. Training Loop
     best_val_loss = float('inf')
+    epochs_no_improve = 0
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
@@ -45,6 +51,8 @@ def train_model(miroc6_path, era5_path, epochs=10, batch_size=4, lr=1e-3, seq_le
             loss = criterion(outputs, y)
             
             loss.backward()
+            # Gradient clipping prevents exploding gradients with normalized features
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_loss += loss.item()
             
@@ -62,18 +70,29 @@ def train_model(miroc6_path, era5_path, epochs=10, batch_size=4, lr=1e-3, seq_le
                 
         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0
         
-        print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {current_lr:.1e}")
         
-        # 6. Checkpointing
+        # 6. Step the scheduler based on validation loss
+        scheduler.step(avg_val_loss)
+        
+        # 7. Checkpointing + Early Stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            epochs_no_improve = 0
             torch.save(model.state_dict(), "best_downscaler_model.pth")
             print(">> Saved new improved model checkpoint!")
+        else:
+            epochs_no_improve += 1
+            print(f"   No improvement for {epochs_no_improve}/{patience} epochs.")
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs. Best Val Loss: {best_val_loss:.4f}")
+                break
 
 if __name__ == "__main__":
     MIROC6 = "MIROC6_UAE_Spatial_Input_1950_2014.csv"
     # Assuming ERA5 target spatial data will be generated later
-    ERA5_TARGET = "ERA5_UAE_Spatial_Target_1950_2014.csv" 
+    ERA5_TARGET = "UAE_ERA5_Spatial_Baseline_1950_2014.csv" 
     
     print("--- UAE Climate Downscaling Training Pipeline ---")
     train_model(MIROC6, ERA5_TARGET)

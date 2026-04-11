@@ -6,3 +6,6 @@
 /test_dims.py
 *.nc
 *.csv
+*.pyc
+*.npy
+*.pth

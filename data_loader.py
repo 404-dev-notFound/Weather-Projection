@@ -3,9 +3,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import os
+import json
 
 class ClimateDataset(Dataset):
-    def __init__(self, miroc6_path, era5_path=None, sequence_length=14):
+    def __init__(self, miroc6_path, era5_path=None, sequence_length=14, norm_stats=None):
         """
         Custom Dataset for Climate Downscaling using sliding windows.
         
@@ -14,6 +15,8 @@ class ClimateDataset(Dataset):
             era5_path (str): Path to the target high-res data (ERA5 17x17).
                              If None, the dataset can be used for inference only.
             sequence_length (int): Number of days in the sliding window.
+            norm_stats (dict): Pre-computed normalization stats for inference.
+                               If None, stats are computed from the training data.
         """
         self.sequence_length = sequence_length
         self.features = ['T_avg', 'PCP', 'AP', 'RH', 'WS']
@@ -39,20 +42,57 @@ class ClimateDataset(Dataset):
             if era5_path is not None:
                 print(f"Warning: ERA5 dataset '{era5_path}' not found. Loading only continuous input data for inference.")
             self.valid_dates = sorted(dates_x)
+        
+        # --- PER-CHANNEL NORMALIZATION (Z-Score) ---
+        # This ensures all 5 variables contribute equally to the loss,
+        # preventing AP (~1000 hPa) from dominating T_avg (~30 C) or WS (~5 m/s).
+        if norm_stats is not None:
+            self.norm_stats = norm_stats
+            print("Using provided normalization statistics.")
+        else:
+            print("Computing per-channel normalization statistics...")
+            self.norm_stats = self._compute_norm_stats()
+            # Save stats to disk so they can be reloaded for inference/denormalization
+            self._save_norm_stats("norm_stats.json")
+        
+        print("  Channel stats (mean / std):")
+        for feat in self.features:
+            m_mean, m_std = self.norm_stats['x'][feat]
+            print(f"    MIROC6 {feat:>5s}: {m_mean:>10.3f} / {m_std:>8.3f}")
+        if 'y' in self.norm_stats:
+            for feat in self.features:
+                y_mean, y_std = self.norm_stats['y'][feat]
+                print(f"    ERA5   {feat:>5s}: {y_mean:>10.3f} / {y_std:>8.3f}")
             
-        print("Reshaping spatial grids...")
+        print("Reshaping and normalizing spatial grids...")
         # Dictionary to store tensors by date for temporal slicing
-        self.data_dict_x = self._build_spatial_dict(self.df_x, self.valid_dates, grid_size=3)
+        self.data_dict_x = self._build_spatial_dict(self.df_x, self.valid_dates, grid_size=3, stats_key='x')
         self.data_dict_y = None
         if self.df_y is not None:
-            self.data_dict_y = self._build_spatial_dict(self.df_y, self.valid_dates, grid_size=17)
+            self.data_dict_y = self._build_spatial_dict(self.df_y, self.valid_dates, grid_size=17, stats_key='y')
             
         # We can only create sequences where we have enough historical data
         self.sequence_indices = []
         for i in range(len(self.valid_dates) - self.sequence_length + 1):
              self.sequence_indices.append(i)
 
-    def _build_spatial_dict(self, df, valid_dates, grid_size):
+    def _compute_norm_stats(self):
+        """Compute mean and std for each feature channel from the raw data."""
+        stats = {'x': {}, 'y': {}}
+        for feat in self.features:
+            stats['x'][feat] = (float(self.df_x[feat].mean()), float(self.df_x[feat].std()))
+        if self.df_y is not None:
+            for feat in self.features:
+                stats['y'][feat] = (float(self.df_y[feat].mean()), float(self.df_y[feat].std()))
+        return stats
+    
+    def _save_norm_stats(self, path):
+        """Save normalization stats to JSON so they can be reloaded for inference."""
+        with open(path, 'w') as f:
+            json.dump(self.norm_stats, f, indent=2)
+        print(f"  Saved normalization stats to {path}")
+    
+    def _build_spatial_dict(self, df, valid_dates, grid_size, stats_key):
         data_dict = {}
         # Make a fast lookup subset
         df_sub = df[df['Date'].isin(valid_dates)]
@@ -61,8 +101,11 @@ class ClimateDataset(Dataset):
         for date, group in grouped:
             # group has size grid_size*grid_size x len(features)
             spatial_tensor = []
-            for feat in self.features:
+            for i, feat in enumerate(self.features):
                 mat = group[feat].values.reshape(grid_size, grid_size)
+                # Z-Score normalization: (value - mean) / std
+                mean, std = self.norm_stats[stats_key][feat]
+                mat = (mat - mean) / (std + 1e-8)  # epsilon to prevent division by zero
                 spatial_tensor.append(mat)
             # shape: (Channels, Height, Width)
             spatial_tensor = np.stack(spatial_tensor, axis=0)

@@ -36,13 +36,19 @@ class ConvLSTMCell(nn.Module):
         return h_next, c_next
 
 class CNNLSTM_Downscaler(nn.Module):
-    def __init__(self, in_channels=5, hidden_channels=32, out_channels=5):
+    def __init__(self, in_channels=5, hidden_channels=64, out_channels=5):
         super(CNNLSTM_Downscaler, self).__init__()
         
-        # Spatial Feature Extraction
-        # Applies to the already interpolated 17x17 frame
+        # Deeper Spatial Feature Extraction with BatchNorm for stable training
         self.feature_conv1 = nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(hidden_channels)
         self.feature_conv2 = nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(hidden_channels)
+        self.feature_conv3 = nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(hidden_channels)
+        
+        # Residual projection: match input channels to hidden_channels for skip connection
+        self.residual_proj = nn.Conv2d(in_channels, hidden_channels, kernel_size=1)
         
         # Temporal Sequence Modeler
         self.conv_lstm = ConvLSTMCell(
@@ -68,7 +74,6 @@ class CNNLSTM_Downscaler(nn.Module):
         B, T, C, H, W = x.size()
         
         # Step 1: Initialize ConvLSTM hidden states matching the target grid size (17x17)
-        # because the input image will be upsampled to 17x17 before entering ConvLSTM
         target_h, target_w = 17, 17
         h, c = self._init_hidden(B, self.conv_lstm.hidden_dim, target_h, target_w, x.device)
         
@@ -76,12 +81,15 @@ class CNNLSTM_Downscaler(nn.Module):
         for t in range(T):
             x_t = x[:, t, :, :, :] # (B, C, 3, 3)
             
-            # Step 2: Spatial Upsampling using Bicubic Interpolation (mitigates checkerboard artifacts)
+            # Step 2: Spatial Upsampling using Bicubic Interpolation
             x_up = F.interpolate(x_t, size=(target_h, target_w), mode='bicubic', align_corners=False)
             
-            # Step 3: Feature Extraction on 17x17
-            feat = F.relu(self.feature_conv1(x_up))
-            feat = F.relu(self.feature_conv2(feat))
+            # Step 3: Deeper Feature Extraction with Residual Connection
+            identity = self.residual_proj(x_up)       # (B, hidden, 17, 17)
+            feat = F.relu(self.bn1(self.feature_conv1(x_up)))
+            feat = F.relu(self.bn2(self.feature_conv2(feat)))
+            feat = self.bn3(self.feature_conv3(feat))
+            feat = F.relu(feat + identity)              # Residual skip connection
             
             # Step 4: Temporal sequence modeling (Memory integration)
             h, c = self.conv_lstm(feat, (h, c))
