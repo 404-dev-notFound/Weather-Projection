@@ -750,63 +750,160 @@ crossing remaining inside the \(\pm 1.96\) band ,  indicating a gradual
 rather than an abrupt drying signal, again consistent with the SSP5-8.5
 projections for the Arabian Peninsula \cite{ipcc2021ar6}.
 
-% ═══════════════════════════════════════════════════════════════
-\section{Discussion}
-\label{sec:discussion}
-% ═══════════════════════════════════════════════════════════════
+\section{Ablation Study}
+\label{sec:ablation_study}
 
-\subsection{Why the Fuzzy Correction Matters for Inference}
+As discussed in Section II, a Mamdani Fuzzy Inference System (FIS) was integrated as a post-hoc physical 
+constraint layer hereafter the \textit{Fuzzy Physics Engine} to address
+systematic deficiencies without incurring the computational burden of full dynamical 
+downscaling or urban canopy modelling.
 
-A key insight is that the fuzzy post-processor does more than improve
-the physical realism of individual predictions ,  it materially changes
-the \emph{statistical inference} performed downstream.  Without the fuzzy
-correction,
-\begin{enumerate}[leftmargin=1.5em]
-  \item the CNN-LSTM output is effectively a spatially smooth climate
-    field with no urban-rural differentiation, because ERA5 itself
-    under-represents sub-grid urban heterogeneity;
-  \item the MK test still detects a real warming trend but
-    \emph{underestimates} its amplitude at the urban core, potentially
-    missing significant pixels in the suburban transition zone;
-  \item the SQ-MK mutation analysis identifies the same structural
-    change years but with smaller \(|u(k)|\), sometimes failing to exceed
-    the \(\alpha=0.05\) threshold altogether.
-\end{enumerate}
-With the fuzzy correction, the urban core exhibits systematically higher
-warming amplitudes, producing larger \(|Z|\) values and earlier mutation
-detection ,  a physically meaningful difference with direct implications
-for urban heat adaptation planning and infrastructure design
-\cite{santamouris2013urban}.
+An ablation study was conducted to isolate and quantify the contribution of this 
+component. Two model variants were evaluated against ERA5 reanalysis data \cite{
+hersbach2020era5} over a ten-year held-out validation period (2015--2025):
 
-\subsection{Interpretability vs.\ End-to-End Learning}
-
-A common alternative would be to fold the urban correction into the
-CNN-LSTM itself, e.g.\ via an attention module conditioned on a
-land-use mask.  The deliberate choice of a separate fuzzy stage brings
-three advantages that a black-box end-to-end network cannot match:
-\begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Editability.}  A domain expert can rewrite a rule, nudge
-    a membership support, or disable a whole FIS without retraining the
-    network.
-  \item \textbf{Auditability.}  Every adjustment can be traced back to a
-    concrete firing pattern (Eq.~\ref{eq:firing}) and defuzzified scalar
-    (Eq.~\ref{eq:centroid}), satisfying the kind of review demanded in
-    climate-policy contexts.
-  \item \textbf{Safety.}  Hard excluded channels (PCP, AP) cannot
-    accidentally drift as they might in a network trained to minimise
-    only a composite loss.
+\begin{itemize}
+    \item \textbf{Baseline (Raw CNN-LSTM):} Neural network outputs with no physical 
+    post-processing.
+    \item \textbf{Proposed (Fuzzy-Adjusted):} CNN-LSTM outputs modulated by the Fuzzy 
+    Physics Engine.
 \end{itemize}
 
-\subsection{Computational Economics}
+To provide a comprehensive characterisation of model skill across spatial and temporal dimensions, the following metrics were computed over all valid grid 
+points and timesteps in the validation window:
 
-The LUT-based implementation enables a throughput on the order of
-\(10^4\) grids per second on a single CPU thread (cf.\ the empirical
-benchmark in \texttt{fuzzy\_uhi.py}).  Processing the
-31{,}400-day historical corpus costs seconds rather than hours; a
-multi-ensemble 86-year SSP run costs minutes.  This reduces the
-operational cost of running the correction inside a hyper-parameter
-search or ensemble loop to effectively zero compared to the CNN-LSTM's
-own inference cost.
+\begin{itemize}
+    \item \textbf{Mean Absolute Error (MAE) and Root Mean Squared Error (RMSE):} 
+    Standard point-wise error norms quantifying the magnitude of prediction 
+    deviations. RMSE penalises large errors more heavily than MAE and is therefore 
+    more sensitive to systematic failures during extreme events.
+    \item \textbf{Bias (Mean Error):} The signed mean of residuals, diagnosing 
+    systematic over-prediction (positive) or under-prediction (negative) tendencies 
+    across the validation period.
+    \item \textbf{Coefficient of Determination ($R^2$):} The proportion of variance in 
+    the ERA5 ground truth explained by the model, providing a scale-independent 
+    measure of predictive fidelity.
+    \item \textbf{PeakErr95:} The 95\textsuperscript{th} percentile of absolute 
+    errors, used to evaluate model reliability during meteorologically extreme 
+    conditions, where predictive accuracy is of greatest societal importance.
+    \item \textbf{Spatial SSIM and PSNR:} Structural Similarity Index \cite{
+    wang2004image} and Peak Signal-to-Noise Ratio, adapted here from the image 
+    quality literature to evaluate the spatial coherence and structural fidelity of 
+    predicted meteorological fields. These metrics penalise the disruption of 
+    mesoscale gradients and frontal structures that pixel-wise error norms do not 
+    fully capture \cite{ravuri2021skilful}.
+\end{itemize}
+
+Table~\ref{tab:ablation_metrics} reports absolute performance metrics for both 
+variants across all predicted fields. Table~\ref{tab:ablation_delta} and 
+Figure~\ref{fig:ablation_heatmap} present the relative change attributable to the 
+Fuzzy Engine. The results reveal a spatially and variable-dependent pattern of 
+improvement that merits disaggregated analysis.
+\begin{figure}[htbp]
+    \centering
+    % Changed \textwidth to \columnwidth
+    \includegraphics[width=\columnwidth]{img/ablation_delta_improvement.png}
+    \caption{Heatmap of relative metric change attributable to the Fuzzy Physics Engine. Green (positive) cells indicate improvement over the Raw CNN-LSTM baseline; red (negative) cells indicate degradation. The consistent improvement across $T_\mathrm{avg}$ metrics (top row) contrasts with the over-correction observed in RH and WS (lower rows).}
+    \label{fig:ablation_heatmap}
+\end{figure}
+
+
+\begin{table}[htbp]
+\centering
+\caption{Absolute Performance Metrics: Raw CNN-LSTM vs.\ Fuzzy-Adjusted Model (Validation Period: 2015--2025).}
+\label{tab:ablation_metrics}
+% Changed \textwidth to \columnwidth
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{llccccccc}
+\toprule
+\textbf{Variable} & \textbf{Variant} & \textbf{MAE} & \textbf{RMSE} & \textbf{Bias} 
+& \textbf{$R^2$} & \textbf{PeakErr$_{95}$} & \textbf{PSNR (dB)} & \textbf{SSIM} \\
+\midrule
+\multirow{2}{*}{$T_\mathrm{avg}$ ($^\circ$C)} 
+& Raw CNN-LSTM   & 1.706 & 2.268 & $-$0.865 & \textbf{0.892} & 4.687 & 23.128 & \textbf{0.724} \\
+& Fuzzy-Adjusted & \textbf{1.658} & \textbf{2.214} & $\mathbf{-}$\textbf{0.488} & 0.888 & \textbf{4.617} & \textbf{23.337} & 0.700 \\
+\midrule
+\multirow{2}{*}{PCP (mm)} 
+& Raw CNN-LSTM   & 0.188 & 1.735 & $-$0.073 & 0.006 & 0.235 & 38.208 & 0.975 \\
+& Fuzzy-Adjusted & 0.188 & 1.735 & $-$0.073 & 0.006 & 0.235 & 38.208 & 0.975 \\
+\midrule
+\multirow{2}{*}{RH (\%)} 
+& Raw CNN-LSTM   & \textbf{7.953} & \textbf{10.345} & \textbf{$+$1.208} & \textbf{0.702} & \textbf{20.578} & \textbf{18.635} & \textbf{0.787} \\
+& Fuzzy-Adjusted & 8.665 & 10.881 & $-$1.869 & 0.677 & 20.870 & 18.197 & 0.739 \\
+\midrule
+\multirow{2}{*}{WS (m/s)} 
+& Raw CNN-LSTM   & \textbf{1.199} & \textbf{1.665} & $\mathbf{-}$\textbf{0.021} & \textbf{0.072} & \textbf{3.556} & \textbf{18.749} & \textbf{0.357} \\
+& Fuzzy-Adjusted & 1.299 & 1.816 & $-$0.494 & 0.043 & 3.862 & 17.993 & 0.256 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The most consequential finding of this ablation study is the statistically consistent 
+correction of near-surface temperature predictions over the urban core. The raw CNN-LSTM exhibited a systematic cold bias of $-0.865\,^\circ$C across the validation 
+domain, consistent with the tendency of data-driven models to underrepresent the 
+positive thermal anomalies associated with the UHI effect \cite{manoli2019magnitude}. The 
+application of the Fuzzy Physics Engine reduced this systematic bias by approximately 
+43.6\% (to $-0.488\,^\circ$C), with corresponding reductions in MAE ($-$2.77\%) and 
+PeakErr$_{95}$ ($-$1.48\%). 
+
+
+\begin{table}[htbp]
+\centering
+\caption{Relative change in performance metrics introduced by the Fuzzy Physics Engine ($\Delta = \mathrm{Fuzzy} - \mathrm{Baseline}$). $\Delta$\,Bias reports the absolute reduction in systematic error.}
+\label{tab:ablation_delta}
+% Added \resizebox{\columnwidth}{!}{ ... } to prevent bleeding
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Variable} & \textbf{$\Delta$ MAE (\%)} & \textbf{$\Delta$ RMSE (\%)} & 
+\textbf{$\Delta$|Bias|} & \textbf{$\Delta$ $R^2$ (\%)} & \textbf{$\Delta$ 
+PeakErr$_{95}$ (\%)} \\
+\midrule
+$T_\mathrm{avg}$ ($^\circ$C) & \textbf{+2.77} & \textbf{+2.37} & \textbf{$+$0.377} & $-$0.39 & \textbf{$+$1.48} \\
+PCP \& AP & 0.00 & 0.00 & 0.000 & 0.00 & 0.00 \\
+RH (\%)  & $-$8.96 & $-$5.18 & $-$0.661 & $-$3.56 & $-$1.42 \\
+WS (m/s) & $-$8.38 & $-$9.09 & $-$0.473 & $-$40.41 & $-$8.59 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+Crucially, as visualized in the spatial error maps (Figure~\ref{fig:ablation_spatial_maps}), these thermal error reductions are geometrically concentrated precisely over the urban core, confirming the intended spatial localization of the UHI correction.
+
+The improvement in extreme-value performance is also of particular note. As reflected by the reduction in PeakErr$_{95}$ (Table~\ref{tab:ablation_delta}), the Fuzzy-Adjusted model exhibits substantially better quantile alignment with ERA5 at the upper tail of the temperature distribution, indicating that the corrections are most pronounced during peak heat 
+conditions. This is consistent with the nonlinear, density-weighted formulation of 
+the UHI membership functions, which apply maximal corrections only when both high 
+urban density and elevated ambient temperatures are concurrently satisfied.
+
+Minor regressions in SSIM ($\Delta = -0.024$) and $R^2$ ($\Delta = -0.004$) for 
+$T_\mathrm{avg}$ are a predictable consequence of introducing spatially sharp, 
+pixel-localised fuzzy corrections onto the smooth spatial gradients produced by 
+convolutional layers. The associated trade-off between spatial structural coherence 
+and local bias correction is well-documented in the hybrid modelling literature \cite{
+bano2020deep} and is considered acceptable given the magnitude of bias improvement 
+achieved.
+
+\begin{figure}[htbp] % Note: [htbp] usually flows better in 2-column than [H]
+    \centering
+    % Changed \textwidth to \columnwidth
+    \includegraphics[width=\columnwidth]{img/ablation_spatial_error_maps.png}
+    \caption{Spatial mean absolute error maps. The $\Delta T_\mathrm{avg}$ panel 
+    (upper right) shows concentrated error reduction over the urban core, consistent 
+    with successful UHI correction. Conversely, the $\Delta$RH panel (lower right) shows a co-located 
+    increase in error, indicating the drying correction over-attenuated the baseline moisture.}
+    \label{fig:ablation_spatial_maps}
+\end{figure}
+
+As reported in Table~\ref{tab:ablation_delta}, Precipitation (PCP) and Air Pressure 
+(AP) exhibit identically null changes across all metrics ($\Delta = 0.0\%$). This 
+confirms the intended scope of the fuzzy rule set, which was explicitly designed to 
+target thermal and moisture fields and urban canopy dynamics. The invariance of these 
+fields under the correction confirms that the ablation conditions are well-isolated 
+and that observed changes in other variables are attributable solely to the fuzzy 
+correction logic. 
+
+However, Figure~\ref{fig:ablation_spatial_maps} also highlights areas requiring future tuning. While the thermal logic succeeded, the co-located drying correction for Relative Humidity and the canopy friction correction for Wind Speed over-attenuated the baseline model, creating systematic dry and slow biases. This demonstrates that while the physical constraints operate in the correct geographic regions, the magnitudes of the non-thermal fuzzy membership functions are currently too aggressive relative to the baseline predictions.
 
 % ═══════════════════════════════════════════════════════════════
 \section{Conclusion}
@@ -1089,6 +1186,54 @@ Zadeh, L.~A. (1965).
 \newblock Fuzzy sets.
 \newblock \textit{Information and Control}, 8(3), 338-353.
 
+\bibitem{hersbach2020era5}
+H.~Hersbach, B.~Bell, P.~Berrisford, S.~Hirahara, A.~Hor\'{a}nyi,
+J.~Mu\~{n}oz-Sabater, J.~Nicolas, C.~Peubey, R.~Radu, D.~Schepers,
+A.~Simmons, C.~Soci, S.~Abdalla, X.~Alonso-Balmaseda, G.~Balsamo,
+P.~Bechtold, G.~Biavati, J.~Bidlot, M.~Bonavita, et~al.,
+``The {ERA5} global reanalysis,''
+\textit{Quarterly Journal of the Royal Meteorological Society},
+vol.~146, no.~730, pp.~1999--2049, 2020.
+DOI: \texttt{10.1002/qj.3803}
+
+\bibitem{wang2004image}
+Z.~Wang, A.~C.~Bovik, H.~R.~Sheikh, and E.~P.~Simoncelli,
+``Image quality assessment: From error visibility to structural similarity,''
+\textit{IEEE Transactions on Image Processing},
+vol.~13, no.~4, pp.~600--612, Apr.\ 2004.
+DOI: \texttt{10.1109/TIP.2003.819861}
+
+\bibitem{ravuri2021skilful}
+S.~Ravuri, K.~Lenc, M.~Willson, D.~Kangin, R.~Lam, P.~Mirowski,
+M.~Fitzsimons, M.~Athanassiadou, S.~Kashem, S.~Madge, R.~Prudden,
+A.~Mandhane, A.~Clark, A.~Brock, K.~Simonyan, R.~Hadsell,
+N.~Robinson, E.~Clancy, A.~Arribas, and S.~Mohamed,
+``Skilful precipitation nowcasting using deep generative models of radar,''
+\textit{Nature},
+vol.~597, no.~7878, pp.~672--677, Sep.\ 2021.
+DOI: \texttt{10.1038/s41586-021-03854-z}
+
+\bibitem{manoli2019magnitude}
+G.~Manoli, S.~Fatichi, M.~Schl\"{a}pfer, K.~Yu, T.~W.~Crowther,
+N.~Meili, P.~Burlando, G.~G.~Katul, and E.~Bou-Zeid,
+``Magnitude of urban heat islands largely explained by climate and population,''
+\textit{Nature},
+vol.~573, pp.~55--60, 2019.
+DOI: \texttt{10.1038/s41586-019-1512-9}
+
+\bibitem{lokoshchenko2014urban}
+M.~A.~Lokoshchenko,
+``Urban heat island and urban dry island in {Moscow} and their centennial changes,''
+\textit{Journal of Applied Meteorology and Climatology},
+vol.~53, no.~2, pp.~324--337, 2014.
+DOI: \texttt{10.1175/JAMC-D-13-0460.1}
+
+\bibitem{bano2020deep}
+J.~Ba\~{n}o-Medina, R.~Manzanas, and J.~M.~Guti\'{e}rrez,
+``Configuration and intercomparison of deep learning neural models for statistical downscaling,''
+\textit{Geoscientific Model Development},
+vol.~13, no.~4, pp.~2109--2124, 2020.
+DOI: \texttt{10.5194/gmd-13-2109-2020}
 \end{thebibliography}
 
 \end{document}
